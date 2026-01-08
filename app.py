@@ -3,15 +3,11 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 
-st.set_page_config(page_title="Sniper Pro Final", layout="wide")
-st.title("🛡️ Algorithme Quantitatif : Correction & Précision")
+st.set_page_config(page_title="SMC Liquidity + Fib", layout="wide")
+st.title("🏦 Sniper SMC : Liquidity Grab & Golden Fib")
 
-pairs_dict = {
-    "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "GOLD": "GC=F", "BTC/USD": "BTC-USD"
-}
-
-selection = st.sidebar.selectbox("Choisir l'actif :", list(pairs_dict.keys()))
-ticker = pairs_dict[selection]
+pairs_dict = {"EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "GOLD": "GC=F", "BTC/USD": "BTC-USD"}
+selection = st.sidebar.selectbox("Actif :", list(pairs_dict.keys()))
 
 @st.cache_data(ttl=600)
 def load_data(symbol):
@@ -20,47 +16,41 @@ def load_data(symbol):
         df.columns = df.columns.get_level_values(0)
     return df
 
-data = load_data(ticker)
+data = load_data(pairs_dict[selection])
 
-def apply_strategy(df):
-    # 1. Filtre de Tendance Institutionnelle
-    df['EMA200'] = ta.ema(df['Close'], length=200)
-    
-    # 2. Volatilité (Bandes de Bollinger)
-    bbands = ta.bbands(df['Close'], length=20, std=2)
-    df['BBU'] = bbands['BBU_20_2.0']
-    
-    # 3. Force Relative (RSI)
-    df['RSI'] = ta.rsi(df['Close'], length=14)
-    
-    # 4. ATR pour la gestion du risque
-    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
-
+def get_smc_elite_signals(df):
     signals = []
-    for i in range(20, len(df)):
+    for i in range(50, len(df)):
+        # 1. Définir le Range Majeur (50 bougies)
+        window = df.iloc[i-50:i]
+        hi, lo = window['High'].max(), window['Low'].min()
+        
+        # 2. Tracer Fibonacci
+        fib_618 = lo + (0.618 * (hi - lo))
+        fib_786 = lo + (0.786 * (hi - lo))
+        
         curr = df.iloc[i]
         prev = df.iloc[i-1]
         
-        # --- LOGIQUE DE CONVERGENCE (Objectif 80%) ---
-        # A. On ne trade que dans le sens de la tendance lourde
-        trend_up = curr['Close'] > curr['EMA200']
+        # 3. DÉTECTION DU "STOP HUNT" (Liquidité)
+        # Le prix doit passer sous un bas récent (old_low) et réintégrer vite
+        old_low = window['Low'].tail(15).min()
+        is_sweep = prev['Low'] < old_low and curr['Close'] > old_low
         
-        # B. On attend une explosion de prix (Cassure Bollinger)
-        breakout = prev['Close'] < prev['BBU'] and curr['Close'] > curr['BBU']
+        # 4. CONFLUENCE ZONE D'ACHAT
+        # Le sweep doit se passer dans la Golden Pocket (61.8 - 78.6)
+        in_golden_zone = fib_786 <= curr['Low'] <= fib_618
         
-        # C. On vérifie que le RSI n'est pas encore "épuisé" (< 70)
-        momentum = 50 < curr['RSI'] < 70
-        
-        # D. Filtre de session (Uniquement pendant que Londres/NY sont ouverts)
-        hour = df.index[i].hour
-        active_hours = 8 <= hour <= 18
+        # 5. CONFIRMATION DE STRUCTURE (MSS)
+        # On veut une bougie de retournement (verte et forte)
+        is_mss = curr['Close'] > curr['Open'] and curr['Close'] > prev['High']
 
-        if trend_up and breakout and momentum and active_hours:
-            # Gestion du risque Ratio 1:2
-            tp = curr['Close'] + (curr['ATR'] * 2)
-            sl = curr['Close'] - (curr['ATR'] * 1.5)
+        if is_sweep and in_golden_zone and is_mss:
+            # Sortie de Pro : On vise le haut du range (Ratio énorme)
+            sl = curr['Low'] - (ta.atr(df['High'], df['Low'], df['Close']).iloc[i] * 0.5)
+            tp = hi
             
-            future = df.iloc[i+1 : i+72]
+            future = df.iloc[i+1 : i+100]
             res = "En cours"
             for _, row in future.iterrows():
                 if row['High'] >= tp:
@@ -73,22 +63,19 @@ def apply_strategy(df):
             signals.append({
                 "Date": df.index[i].strftime('%d/%m %H:%M'),
                 "Prix": round(curr['Close'], 5),
+                "Setup": "Liquidity Grab + Fib 61.8%",
                 "Résultat": res
             })
     return signals
 
-tab1, tab2 = st.tabs(["🚀 Signal Direct", "📊 Backtest 80%"])
-
-with tab1:
-    st.info("Stratégie active : Tendance EMA 200 + Breakout Volatilité + Session Institutionnelle.")
-    st.line_chart(data['Close'].tail(100))
+tab1, tab2 = st.tabs(["🚀 Radar SMC", "📜 Backtest Institutionnel"])
 
 with tab2:
-    sig_results = apply_strategy(data)
-    if sig_results:
-        df_res = pd.DataFrame(sig_results).drop_duplicates()
+    results = get_smc_elite_signals(data)
+    if results:
+        df_res = pd.DataFrame(results).drop_duplicates(subset=['Date'])
         finished = df_res[df_res['Résultat'] != "En cours"]
         if not finished.empty:
             wr = (finished['Résultat'] == "✅ GAGNÉ").sum() / len(finished) * 100
-            st.metric("Taux de Réussite Réel", f"{wr:.1f}%")
+            st.metric("Taux de Réussite (SMC/Fib)", f"{wr:.1f}%")
         st.table(df_res.sort_values(by="Date", ascending=False))
