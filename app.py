@@ -1,99 +1,83 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
 
-st.set_page_config(page_title="EUR/USD Hyper-Optimized", layout="wide")
-st.title("🏛️ Algorithme Auto-Optimisé : Meilleure Combinaison Historique")
+st.set_page_config(page_title="SMC London Sniper", layout="wide")
+st.title("🏦 Stratégie Institutionnelle : London Judas Swing")
 
 @st.cache_data(ttl=3600)
-def load_data():
-    df = yf.download("EURUSD=X", period="1y", interval="1h")
+def load_eurusd_data():
+    # On utilise le 15 minutes (M15) car c'est l'unité de temps des banques pour l'exécution
+    df = yf.download("EURUSD=X", period="60d", interval="15m")
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    df.index = pd.to_datetime(df.index, utc=True)
     return df
 
-data = load_data()
+data = load_eurusd_data()
 
-def backtest_best_logic(df):
-    # --- CALCUL DES COMPOSANTES DE LA MEILLEURE STRATÉGIE ---
-    # 1. Filtre de Tendance : EMA 200 (Le flux institutionnel)
-    df['EMA200'] = ta.ema(df['Close'], length=200)
-    
-    # 2. Zone de Valeur : EMA 13 (La moyenne de court terme)
-    df['EMA13'] = ta.ema(df['Close'], length=13)
-    
-    # 3. Confirmation de Force : ADX (On évite les marchés plats)
-    adx = ta.adx(df['High'], df['Low'], df['Close'], length=14)
-    df['ADX'] = adx['ADX_14']
-    
-    # 4. Momentum : MACD
-    macd = ta.macd(df['Close'])
-    df['M_L'] = macd.iloc[:, 0]
-    df['M_S'] = macd.iloc[:, 2]
-
+def apply_judas_strategy(df):
+    df['Date'] = df.index.date
+    unique_days = df['Date'].unique()
     signals = []
-    # Test sur les 6 derniers mois
-    for i in range(200, len(df)):
-        curr = df.iloc[i]
-        prev = df.iloc[i-1]
-        
-        # --- LA COMBINAISON GAGNANTE ---
-        # A. On suit la tendance lourde (Prix > EMA 200)
-        trend = curr['Close'] > curr['EMA200']
-        
-        # B. Le marché a de la force (ADX > 20)
-        power = curr['ADX'] > 20
-        
-        # C. Le "Pullback" : Le prix a touché l'EMA 13 (respiration) puis repart
-        pullback = prev['Low'] <= prev['EMA13'] and curr['Close'] > curr['EMA13']
-        
-        # D. Confirmation MACD : Toujours en phase ascendante
-        momentum = curr['M_L'] > curr['M_S']
-        
-        # E. Heures de forte probabilité (08h - 16h)
-        is_session = 8 <= df.index[i].hour <= 16
 
-        if trend and power and pullback and momentum and is_session:
-            # Gestion de risque optimisée (Ratio 1:2)
-            atr = ta.atr(df['High'], df['Low'], df['Close'], length=14).iloc[i]
-            sl = curr['Close'] - (atr * 1.5)
-            tp = curr['Close'] + (atr * 3.0)
+    for day in unique_days:
+        day_data = df[df['Date'] == day]
+        if len(day_data) < 40: continue
+
+        # 1. RANGE D'ASIE (00:00 - 07:00 UTC)
+        asia_session = day_data[(day_data.index.hour >= 0) & (day_data.index.hour < 7)]
+        if asia_session.empty: continue
+        asia_high = asia_session['High'].max()
+        asia_low = asia_session['Low'].min()
+
+        # 2. FENÊTRE DE MANIPULATION (08:00 - 10:00)
+        london_open = day_data[(day_data.index.hour >= 8) & (day_data.index.hour <= 10)]
+        
+        executed_today = False
+        for idx, row in london_open.iterrows():
+            if executed_today: break
+
+            # --- LE SETUP DE RÉUSSITE ---
+            # A. Prise de Liquidité (Le prix dépasse le haut d'Asie)
+            if row['High'] > asia_high and row['Close'] < asia_high:
+                # B. Entrée Sell : On parie sur le retour vers le bas d'Asie
+                sl = row['High'] + 0.0005 # Stop au-dessus de la mèche
+                tp = asia_low             # Objectif : Bas d'Asie
+                
+                # Vérification du résultat
+                future = day_data[day_data.index > idx]
+                for _, f_row in future.iterrows():
+                    if f_row['Low'] <= tp:
+                        signals.append({"Date": idx, "Type": "SELL (Judas)", "Résultat": "✅ GAGNÉ"})
+                        executed_today = True
+                        break
+                    if f_row['High'] >= sl:
+                        signals.append({"Date": idx, "Type": "SELL (Judas)", "Résultat": "❌ STOP"})
+                        executed_today = True
+                        break
             
-            future = df.iloc[i+1 : i+48]
-            res = "En cours"
-            for _, row in future.iterrows():
-                if row['High'] >= tp:
-                    res = "✅ GAGNÉ"
-                    break
-                if row['Low'] <= sl:
-                    res = "❌ PERDU"
-                    break
-            
-            signals.append({
-                "Date": df.index[i].strftime('%d/%m %H:%M'),
-                "Prix": round(curr['Close'], 5),
-                "Résultat": res
-            })
-            
+            # Cas inverse (Achat)
+            elif row['Low'] < asia_low and row['Close'] > asia_low:
+                sl = row['Low'] - 0.0005
+                tp = asia_high
+                
+                future = day_data[day_data.index > idx]
+                for _, f_row in future.iterrows():
+                    if f_row['High'] >= tp:
+                        signals.append({"Date": idx, "Type": "BUY (Judas)", "Résultat": "✅ GAGNÉ"})
+                        executed_today = True
+                        break
+                    if f_row['Low'] <= sl:
+                        signals.append({"Date": idx, "Type": "BUY (Judas)", "Résultat": "❌ STOP"})
+                        executed_today = True
+                        break
+
     return signals
 
-# --- EXÉCUTION DU TEST ---
-tab1, tab2 = st.tabs(["🚀 Radar Temps Réel", "📊 Rapport Statistique 6 Mois"])
-
-with tab2:
-    results = backtest_best_logic(data)
-    if results:
-        df_res = pd.DataFrame(results)
-        finished = df_res[df_res['Résultat'] != "En cours"]
-        if not finished.empty:
-            wr = (finished['Résultat'] == "✅ GAGNÉ").sum() / len(finished) * 100
-            st.metric("Taux de Réussite de la Meilleure Combinaison", f"{wr:.1f}%")
-            
-            if wr > 70:
-                st.success("🎯 Cette configuration est statistiquement valide pour l'EUR/USD.")
-            else:
-                st.info("Le marché actuel est très volatil, le taux s'adapte à la liquidité.")
-                
-        st.dataframe(df_res.sort_values(by="Date", ascending=False), use_container_width=True)
+# --- RÉSULTATS ---
+trades = apply_judas_strategy(data)
+if trades:
+    df_res = pd.DataFrame(trades)
+    wr = (df_res[df_res['Résultat'] == "✅ GAGNÉ"].shape[0] / len(df_res)) * 100
+    st.metric("Taux de Réussite Réel (SMC)", f"{wr:.1f}%")
+    st.table(df_res.sort_values(by="Date", ascending=False))
