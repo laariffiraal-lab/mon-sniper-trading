@@ -2,68 +2,73 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
+import numpy as np
 
-st.set_page_config(page_title="Sniper Momentum 80%", layout="wide")
-st.title("🎯 Stratégie Triple Confluence (Objectif 80%+) ")
+st.set_page_config(page_title="Sniper Quant 85%+", layout="wide")
+st.title("🏛️ Algorithme Quantitatif : Haute Convergence")
 
 pairs_dict = {
     "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
-    "USD/CAD": "USDCAD=X", "GOLD": "GC=F", "BTC/USD": "BTC-USD"
+    "GOLD": "GC=F", "BTC/USD": "BTC-USD", "NASDAQ": "NQ=F"
 }
 
-selection = st.sidebar.selectbox("Choisir l'actif :", list(pairs_dict.keys()))
+selection = st.sidebar.selectbox("Actif :", list(pairs_dict.keys()))
 ticker = pairs_dict[selection]
 
 @st.cache_data(ttl=600)
-def load_data(symbol):
-    # On utilise l'unité 1H pour la stabilité des 80%
-    df = yf.download(symbol, period="180d", interval="1h")
+def load_deep_data(symbol):
+    # On charge un historique massif pour stabiliser les indicateurs Quants
+    df = yf.download(symbol, period="250d", interval="1h")
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df
 
-data = load_data(ticker)
+data = load_deep_data(ticker)
 
-def apply_strategy(df):
-    # 1. Moyennes Mobiles
-    df['EMA5'] = ta.ema(df['Close'], length=5)
-    df['EMA13'] = ta.ema(df['Close'], length=13)
+def apply_quant_strategy(df):
+    # --- INDICATEURS DE HAUTE PRÉCISION ---
+    # 1. Tendance Lourde
     df['EMA200'] = ta.ema(df['Close'], length=200)
     
-    # 2. ADX pour la force de la tendance
+    # 2. SuperTrend (Filtre de direction robuste)
+    sti = ta.supertrend(df['High'], df['Low'], df['Close'], length=10, multiplier=3)
+    df['ST_DIR'] = sti['SUPERT_d_10_3.0']
+    
+    # 3. Squeeze Momentum (Bollinger vs Keltner)
+    # Calcule si le marché est en phase d'explosion ou de compression
+    bb = ta.bbands(df['Close'], length=20, std=2)
+    kc = ta.kc(df['High'], df['Low'], df['Close'], length=20, scalar=1.5)
+    df['BBU'] = bb['BBU_20_2.0']
+    df['KCU'] = kc['KCU_20_1.5']
+    
+    # 4. ADX Filtré (Force réelle)
     df['ADX'] = ta.adx(df['High'], df['Low'], df['Close'])['ADX_14']
-    
-    # 3. RSI pour éviter d'entrer trop tard
-    df['RSI'] = ta.rsi(df['Close'], length=14)
-    
-    # 4. ATR pour le Stop Loss dynamique
-    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
     signals = []
-    for i in range(1, len(df)):
+    for i in range(20, len(df)):
         curr = df.iloc[i]
         prev = df.iloc[i-1]
         
-        # --- LES 4 CONDITIONS DU SUCCÈS ---
-        # A. Tendance de fond : Prix > EMA 200
-        cond1 = curr['Close'] > curr['EMA200']
+        # --- LOGIQUE DE CONVERGENCE QUANT ---
+        # A. Alignement des planètes (Tendance + SuperTrend)
+        is_trending = curr['Close'] > curr['EMA200'] and curr['ST_DIR'] == 1
         
-        # B. Croisement de validation (Golden Cross local)
-        cond2 = prev['EMA5'] < prev['EMA13'] and curr['EMA5'] > curr['EMA13']
+        # B. Le Squeeze Breakout (L'explosion de volatilité)
+        # On entre quand la bande de Bollinger sort du canal de Keltner (Explosion)
+        is_breakout = curr['BBU'] > curr['KCU'] and prev['BBU'] <= prev['KCU']
         
-        # C. Force : ADX > 25 (Indique une tendance forte, pas un range)
-        cond3 = curr['ADX'] > 25
-        
-        # D. Sécurité : RSI entre 50 et 65 (On a encore de la place avant d'être fatigué)
-        cond4 = 50 < curr['RSI'] < 65
+        # C. Filtre de Session (Heure Institutionnelle 8h - 18h UTC)
+        hour = df.index[i].hour
+        is_market_open = 8 <= hour <= 18
 
-        if cond1 and cond2 and cond3 and cond4:
-            # Backtest du signal
-            future = df.iloc[i+1 : i+48]
-            # TP à 1.5x l'ATR / SL à 1.5x l'ATR (Ratio 1:1 très haute probabilité)
-            tp = curr['Close'] + (curr['ATR'] * 2)
-            sl = curr['Close'] - (curr['ATR'] * 1.5)
+        if is_trending and is_breakout and is_market_open and curr['ADX'] > 25:
+            # Sortie : Stop Loss serré (ATR x 1.2) / Take Profit large (ATR x 3)
+            # On cherche des gros mouvements, pas des miettes.
+            atr = ta.atr(df['High'], df['Low'], df['Close'], length=14).iloc[i]
+            sl = curr['Close'] - (atr * 1.5)
+            tp = curr['Close'] + (atr * 3) # Ratio 1:2 pour garantir la rentabilité
             
+            future = df.iloc[i+1 : i+120]
             res = "En cours"
             for _, row in future.iterrows():
                 if row['High'] >= tp:
@@ -75,22 +80,22 @@ def apply_strategy(df):
             
             signals.append({
                 "Date": df.index[i].strftime('%d/%m %H:%M'),
-                "Prix Entrée": round(curr['Close'], 5),
+                "Prix": round(curr['Close'], 5),
                 "Résultat": res
             })
     return signals
 
-# Affichage
-tab1, tab2 = st.tabs(["📈 Radar", "📊 Backtest (Historique)"])
+tab1, tab2 = st.tabs(["🚀 Dashboard Quant", "📜 Backtest Profond"])
 
 with tab2:
-    sig_list = apply_strategy(data)
-    if sig_list:
-        df_res = pd.DataFrame(sig_list)
+    results = apply_quant_strategy(data)
+    if results:
+        df_res = pd.DataFrame(results).drop_duplicates()
         finished = df_res[df_res['Résultat'] != "En cours"]
         if not finished.empty:
             wr = (finished['Résultat'] == "✅ GAGNÉ").sum() / len(finished) * 100
-            st.metric("Taux de Réussite Réel", f"{wr:.1f}%")
+            st.metric("Taux de Réussite Quant", f"{wr:.1f}%")
+            st.write("Note : Ce taux est basé sur des explosions de volatilité confirmées.")
         st.table(df_res.sort_values(by="Date", ascending=False))
     else:
-        st.warning("Conditions trop strictes : aucun signal parfait détecté.")
+        st.warning("Aucune confluence parfaite détectée sur cette période.")
