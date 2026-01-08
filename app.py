@@ -47,11 +47,10 @@ if not data.empty:
         st.success("🔥 SIGNAL D'ACHAT (BUY) : Zone Fibonacci OTE détectée !")
         st.write(f"🚩 **Stop Loss :** {bas_recent:.5f}")
         st.write(f"🎯 **Objectif (TP) :** {prix_actuel + (prix_actuel - bas_recent) * 2:.5f}")
-    
-    elif not tendance_hausse and prix_actuel < ss_a.iloc[-1] and dans_zone_fibo:
-        st.error("📉 SIGNAL DE VENTE (SELL) : Zone de liquidation détectée !")
-        st.write(f"🚩 **Stop Loss :** {haut_recent:.5f}")
-   if buy_signal:
+    # --- AFFICHAGE DES RÉSULTATS ---
+st.header(f"Analyse pour {ticker}")
+
+if buy_signal:
     st.success("🚀 SIGNAL D'ACHAT : Le prix est dans la zone de rechargement Fibonacci !")
 elif sell_signal:
     st.warning("📉 SIGNAL DE VENTE : Le prix est dans la zone d'extension Fibonacci !")
