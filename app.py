@@ -58,4 +58,4 @@ if not data.empty:
     # Graphique simple pour voir l'évolution
     st.line_chart(data['Close'].tail(50))
     
-    st.
+ st.write(f"Dernière mise à jour : {data.index[-1]}")
