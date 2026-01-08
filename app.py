@@ -17,12 +17,11 @@ data = yf.download(symbole, period="5d", interval="15m")
 if not data.empty:
     # --- CALCULS TECHNIQUES ---
     # EMA 200 pour la tendance globale
-    data['EMA200'] = ta.ema(data['Close'], length=200)
-    
-    # Ichimoku pour la structure
-    ichimoku, span = ta.ichimoku(data['High'], data['Low'], data['Close'])
-    ss_a = ichimoku['ISA_9']
-    
+    # Calcul Ichimoku
+ichimoku = data.ta.ichimoku()[0]
+# Utilisation de noms de colonnes plus simples pour éviter l'erreur
+span_a = ichimoku.iloc[:, 0] # Senkou Span A
+span_b = ichimoku.iloc[:, 1] # Senkou Span B
     # Fibonacci OTE (Optimal Trade Entry) sur les 30 dernières bougies
     haut_recent = data['High'].rolling(window=30).max().iloc[-1]
     bas_recent = data['Low'].rolling(window=30).min().iloc[-1]
