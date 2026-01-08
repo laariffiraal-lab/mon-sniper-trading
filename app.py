@@ -51,12 +51,12 @@ if not data.empty:
     elif not tendance_hausse and prix_actuel < ss_a.iloc[-1] and dans_zone_fibo:
         st.error("📉 SIGNAL DE VENTE (SELL) : Zone de liquidation détectée !")
         st.write(f"🚩 **Stop Loss :** {haut_recent:.5f}")
-    
-    else:
-        st.info("⌛ ANALYSE : Le marché n'est pas encore dans une zone de haute probabilité. Attends un retour dans la zone Fibonacci.")
-
-   else:
-    st.info("⌛ ANALYSE : Le marché n'est pas encore dans une zone de haute probabilité. Attends un retour dans la zone Fibonacci.")
+   if buy_signal:
+    st.success("🚀 SIGNAL D'ACHAT : Le prix est dans la zone de rechargement Fibonacci !")
+elif sell_signal:
+    st.warning("📉 SIGNAL DE VENTE : Le prix est dans la zone d'extension Fibonacci !")
+else:
+    st.info("⌛ ANALYSE : Le marché n'est pas encore dans une zone de haute probabilité.")
 
 st.line_chart(data['Close'].tail(50))
 st.write(f"Dernière mise à jour : {data.index[-1]}")
