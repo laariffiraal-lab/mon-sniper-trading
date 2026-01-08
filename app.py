@@ -3,78 +3,104 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 
-st.set_page_config(page_title="Sniper Pro Multi-Paires", layout="wide")
-st.title("🎯 Sniper Pro : Stratégie Haute Précision 80%+")
+st.set_page_config(page_title="Sniper Pro + Backtest", layout="wide")
+st.title("🎯 Sniper Pro : Temps Réel & Backtest 6 Mois")
 
-# 1. LISTE COMPLÈTE DE TES PAIRES
+# 1. Configuration des paires
 pairs_dict = {
-    "EUR/USD": "EURUSD=X",
-    "GBP/USD": "GBPUSD=X",
-    "USD/CHF": "USDCHF=X",
-    "USD/JPY": "USDJPY=X",
-    "NZD/USD": "NZDUSD=X",
-    "USD/CAD": "USDCAD=X",
-    "AUD/JPY": "AUDJPY=X",
-    "GOLD (Or)": "GC=F",
-    "BTC/USD": "BTC-USD"
+    "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/CHF": "USDCHF=X",
+    "USD/JPY": "USDJPY=X", "NZD/USD": "NZDUSD=X", "USD/CAD": "USDCAD=X",
+    "AUD/JPY": "AUDJPY=X", "GOLD": "GC=F", "BTC/USD": "BTC-USD"
 }
 
-selection = st.sidebar.selectbox("Choisir l'actif à analyser :", list(pairs_dict.keys()))
+selection = st.sidebar.selectbox("Choisir l'actif :", list(pairs_dict.keys()))
 ticker = pairs_dict[selection]
-timeframe = st.sidebar.selectbox("Unité de temps :", ["15m", "30m", "1h"])
 
-# Récupération des données (période de 15 jours pour plus de stabilité)
-data = yf.download(ticker, period="15d", interval=timeframe)
+# Création des onglets
+tab1, tab2 = st.tabs(["🚀 Signal en Direct", "📜 Historique (6 mois)"])
 
-if not data.empty:
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
-    
-    # 2. CALCULS DES INDICATEURS DE CONFLUENCE
-    data['EMA200'] = ta.ema(data['Close'], length=200)
-    data['ADX'] = ta.adx(data['High'], data['Low'], data['Close'], length=14)['ADX_14']
-    data['RSI'] = ta.rsi(data['Close'], length=14)
-    data['ATR'] = ta.atr(data['High'], data['Low'], data['Close'], length=14)
-    
+# --- CHARGEMENT DES DONNÉES ---
+@st.cache_data
+def load_data(symbol, period="180d"):
+    df = yf.download(symbol, period=period, interval="1h") # 1h pour un historique propre sur 6 mois
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    return df
+
+data = load_data(ticker)
+
+# --- CALCUL DES INDICATEURS ---
+data['EMA200'] = ta.ema(data['Close'], length=200)
+data['ADX'] = ta.adx(data['High'], data['Low'], data['Close'])['ADX_14']
+data['RSI'] = ta.rsi(data['Close'], length=14)
+data['ATR'] = ta.atr(data['High'], data['Low'], data['Close'], length=14)
+
+# --- LOGIQUE DE SIGNAL ---
+def get_signals(df):
+    signals = []
+    for i in range(200, len(df)):
+        # Fenêtre glissante pour Fibonacci (100 bougies)
+        window = df.iloc[i-100:i]
+        hi = window['High'].max()
+        lo = window['Low'].min()
+        fib_786 = lo + (0.786 * (hi - lo))
+        fib_618 = lo + (0.618 * (hi - lo))
+        
+        curr = df.iloc[i]
+        prev = df.iloc[i-1]
+        
+        # Conditions 80%+ 
+        c1 = curr['Close'] > curr['EMA200'] # Tendance
+        c2 = fib_786 <= curr['Low'] <= fib_618 # Zone Fib
+        c3 = curr['ADX'] > 25 # Force
+        c4 = curr['RSI'] > prev['RSI'] # Momentum
+        
+        if c1 and c2 and c3 and c4:
+            # Simulation du résultat (est-ce que le prix a touché le TP avant le SL ?)
+            tp = hi 
+            sl = lo - (curr['ATR'] * 1.5)
+            
+            # On regarde les 24h suivantes pour le dénouement
+            future = df.iloc[i+1 : i+24]
+            win = False
+            for p in future['High']:
+                if p >= tp:
+                    win = True
+                    break
+                if p <= sl: break
+            
+            signals.append({
+                "Date": df.index[i],
+                "Prix Entrée": round(curr['Close'], 4),
+                "Résultat": "✅ GAGNÉ" if win else "❌ PERDU",
+                "TP": round(tp, 4),
+                "SL": round(sl, 4)
+            })
+    return signals
+
+# --- ONGLET 1 : SIGNAL EN DIRECT ---
+with tab1:
     curr = data.iloc[-1]
-    prev = data.iloc[-2]
-    
-    # Fibonacci sur les 100 dernières bougies (Zone Deep Discount)
-    high_p = float(data['High'].tail(100).max())
-    low_p = float(data['Low'].tail(100).min())
-    diff = high_p - low_p
-    fib_786 = low_p + (0.786 * diff)
-    fib_618 = low_p + (0.618 * diff)
-
-    # 3. FILTRES DE SÉCURITÉ (Règle des 80%+)
-    # On gère l'inversion pour les paires en USD/XXX (comme USDJPY ou USDCAD)
-    is_bullish = curr['Close'] > curr['EMA200']
-    is_in_zone = fib_786 <= curr['Close'] <= fib_618
-    is_strong = curr['ADX'] > 25
-    is_rebounding = curr['RSI'] > prev['RSI']
-
-    # Calcul dynamique du TP/SL avec l'ATR (Volatilité)
-    stop_loss = low_p - (curr['ATR'] * 1.5)
-    take_profit = high_p + (curr['ATR'] * 1.0)
-
-    # 4. AFFICHAGE DU DASHBOARD
-    st.header(f"Analyse en cours : {selection}")
-    
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Prix Actuel", f"{curr['Close']:.4f}")
-    c2.metric("Tendance", "HAUSSIÈRE" if is_bullish else "BAISSIÈRE")
-    c3.metric("Force (ADX)", f"{curr['ADX']:.1f}")
-    c4.metric("RSI", f"{curr['RSI']:.1f}")
-
-    if is_bullish and is_in_zone and is_strong and is_rebounding:
-        st.balloons()
-        st.success(f"💎 SIGNAL DIAMANT DÉTECTÉ SUR {selection}")
-        st.write(f"🚀 **ACHAT (BUY) :** {curr['Close']:.4f}")
-        st.write(f"🎯 **TAKE PROFIT :** {take_profit:.4f} | 🛡️ **STOP LOSS :** {stop_loss:.4f}")
+    st.metric("Prix Actuel", f"{curr['Close']:.4f}")
+    if curr['Close'] > curr['EMA200'] and curr['ADX'] > 25:
+        st.success("Tendance et Force validées. Vérifiez la zone Fibonacci.")
     else:
-        st.info("⌛ En attente de confluence... Aucun signal haute probabilité pour le moment.")
+        st.info("Marché neutre ou hors zone.")
+    st.line_chart(data['Close'].tail(100))
 
-    # Affichage du graphique
-    st.line_chart(data[['Close', 'EMA200']].tail(120))
-else:
-    st.error("Impossible de récupérer les données pour cet actif.")
+# --- ONGLET 2 : BACKTEST ---
+with tab2:
+    st.subheader(f"Analyse des signaux sur les 6 derniers mois ({selection})")
+    all_signals = get_signals(data)
+    
+    if all_signals:
+        df_results = pd.DataFrame(all_signals)
+        win_rate = (df_results['Résultat'] == "✅ GAGNÉ").sum() / len(df_results) * 100
+        
+        col1, col2 = st.columns(2)
+        col1.metric("Nombre de Signaux", len(all_signals))
+        col2.metric("Taux de Réussite", f"{win_rate:.1f}%")
+        
+        st.table(df_results.sort_values(by="Date", ascending=False))
+    else:
+        st.write("Aucun signal répondant aux critères stricts n'a été trouvé sur cette période.")
