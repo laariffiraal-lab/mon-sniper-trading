@@ -5,84 +5,101 @@ import pandas_ta as ta
 from datetime import datetime, timedelta
 import pytz
 
-st.set_page_config(page_title="SMC Sniper Pro", layout="wide")
-st.title("🏦 SMC Sniper : Historique & Signal Direct")
+st.set_page_config(page_title="SMC Elite Multi-Asset", layout="wide")
+st.title("🌐 Sniper SMC Elite : Multi-Devises & ATR Dynamique")
 
-# --- 1. CONFIGURATION ET CHARGEMENT ---
+# --- 1. CONFIGURATION MULTI-PAIRES ---
+# Les tickers Yahoo Finance peuvent varier, voici les standards
 pairs = {
     "EUR/USD": "EURUSD=X",
     "GBP/USD": "GBPUSD=X",
+    "USD/CAD": "CAD=X",     # Attention: Yahoo note souvent USD/CAD comme CAD=X (inverse) ou CADUSD=X
+    "NZD/USD": "NZDUSD=X",
+    "AUD/USD": "AUDUSD=X",
     "USD/JPY": "JPY=X"
 }
-selection = st.sidebar.selectbox("Choisir l'actif :", list(pairs.keys()))
 
-@st.cache_data(ttl=300) # Mise à jour auto toutes les 5 min
+# Note pour l'utilisateur sur USD/CAD
+st.sidebar.info("ℹ️ Note : Les paires XXX/USD suivent la logique standard. Pour USD/CAD (CAD=X), la logique est inversée sur Yahoo.")
+
+selection = st.sidebar.selectbox("Choisir l'actif à sniper :", list(pairs.keys()))
+
+@st.cache_data(ttl=300)
 def load_data(symbol):
-    # On prend 1 an pour garantir d'avoir les 6 derniers mois propres
+    # Intervalle 1h pour la fiabilité du signal
     df = yf.download(symbol, period="1y", interval="1h")
-    
-    # Nettoyage des colonnes (MultiIndex)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     
-    # Gestion des fuseaux horaires (UTC -> Paris pour la cohérence)
+    # Gestion Timezone
     df.index = pd.to_datetime(df.index, utc=True)
     try:
         df.index = df.index.tz_convert('Europe/Paris')
     except:
         pass
-        
     return df
 
-data = load_data(pairs[selection])
+ticker = pairs[selection]
+data = load_data(ticker)
 
-# --- 2. INDICATEURS TECHNIQUES ---
-def add_indicators(df):
-    # EMA 50 : Notre juge de paix pour la tendance
+# --- 2. INDICATEURS AVANCÉS ---
+def add_elite_indicators(df):
+    # Tendance de fond
     df['EMA50'] = ta.ema(df['Close'], length=50)
+    
+    # ATR pour le Stop Loss dynamique (s'adapte à la volatilité de NZD vs GBP)
+    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    
+    # RSI pour éviter d'acheter un marché déjà épuisé
+    df['RSI'] = ta.rsi(df['Close'], length=14)
     return df
 
-data = add_indicators(data)
+data = add_elite_indicators(data)
 
-# --- 3. BACKTEST (HISTORIQUE 6 MOIS) ---
-def get_backtest_signals(df):
+# --- 3. MOTEUR DE BACKTEST (6 MOIS) ---
+def get_elite_signals(df, pair_name):
     signals = []
-    # On recule de 180 jours depuis la dernière date disponible
     start_date = df.index[-1] - timedelta(days=180)
-    # On filtre les données
-    df_history = df[df.index >= start_date].copy()
+    df_hist = df[df.index >= start_date].copy()
     
-    df_history['Date_Only'] = df_history.index.date
-    unique_days = df_history['Date_Only'].unique()
+    df_hist['Date_Only'] = df_hist.index.date
+    unique_days = df_hist['Date_Only'].unique()
 
     for day in unique_days:
-        day_data = df_history[df_history['Date_Only'] == day]
+        day_data = df_hist[df_hist['Date_Only'] == day]
         if len(day_data) < 10: continue
 
-        # Définition du Range Asie (00h - 08h)
+        # Range Asie (00h-08h)
         asia = day_data[(day_data.index.hour >= 0) & (day_data.index.hour < 8)]
         if asia.empty: continue
-        
-        asia_high = asia['High'].max()
-        asia_low = asia['Low'].min()
+        asia_hi, asia_lo = asia['High'].max(), asia['Low'].min()
 
-        # Session de Londres (08h - 12h) : La zone de chasse
-        london = day_data[(day_data.index.hour >= 8) & (day_data.index.hour <= 12)]
+        # Killzone (08h-16h) : On couvre Londres ET l'ouverture New York (pour USD/CAD)
+        killzone = day_data[(day_data.index.hour >= 8) & (day_data.index.hour <= 16)]
         
         taken = False
-        for idx, row in london.iterrows():
+        for idx, row in killzone.iterrows():
             if taken: break
             
-            # SCÉNARIO ACHAT (LONG) : Tendance Haussière + Manipulation du Bas
+            # FILTRE 1 : Tendance (EMA 50)
+            # FILTRE 2 : Force de la bougie (Le corps doit être significatif)
+            body_size = abs(row['Close'] - row['Open'])
+            min_body = row['ATR'] * 0.3 # Le corps doit faire au moins 30% de l'ATR (pas de Doji)
+
+            # SCÉNARIO ACHAT (LONG)
             if row['Close'] > row['EMA50']:
-                # Le prix casse le bas d'Asie puis clôture au-dessus
-                if row['Low'] < asia_low and row['Close'] > asia_low:
-                    sl = row['Low'] - 0.0005
-                    tp = asia_high
-                    res = "En cours"
+                # Sweep du BAS + Clôture interne + RSI pas suracheté (<70)
+                if row['Low'] < asia_lo and row['Close'] > asia_lo and row['RSI'] < 70 and body_size > min_body:
                     
-                    # Vérification du résultat
-                    future = df_history[df_history.index > idx]
+                    # Stop Loss adapté à la volatilité (ATR)
+                    sl = row['Low'] - (row['ATR'] * 0.5) 
+                    # Take Profit : On vise le haut Asie ou Ratio 1:2 min
+                    risk = row['Close'] - sl
+                    tp = row['Close'] + (risk * 2.5) # On vise un gros ratio pour absorber les pertes
+                    
+                    # Vérif
+                    res = "En cours"
+                    future = df_hist[df_hist.index > idx]
                     for _, f in future.iterrows():
                         if f['High'] >= tp:
                             res = "✅ GAGNÉ"
@@ -93,23 +110,23 @@ def get_backtest_signals(df):
                     
                     signals.append({
                         "Date": idx.strftime('%d/%m %H:%M'),
-                        "Type": "LONG (Achat)",
-                        "Entrée": round(row['Close'], 5),
-                        "SL": round(sl, 5),
-                        "TP": round(tp, 5),
+                        "Type": "LONG 🟢",
+                        "Prix": round(row['Close'], 5),
                         "Résultat": res
                     })
                     taken = True
 
-            # SCÉNARIO VENTE (SHORT) : Tendance Baissière + Manipulation du Haut
+            # SCÉNARIO VENTE (SHORT)
             elif row['Close'] < row['EMA50']:
-                # Le prix casse le haut d'Asie puis clôture en dessous
-                if row['High'] > asia_high and row['Close'] < asia_high:
-                    sl = row['High'] + 0.0005
-                    tp = asia_low
-                    res = "En cours"
+                # Sweep du HAUT + Clôture interne + RSI pas survendu (>30)
+                if row['High'] > asia_hi and row['Close'] < asia_hi and row['RSI'] > 30 and body_size > min_body:
                     
-                    future = df_history[df_history.index > idx]
+                    sl = row['High'] + (row['ATR'] * 0.5)
+                    risk = sl - row['Close']
+                    tp = row['Close'] - (risk * 2.5)
+                    
+                    res = "En cours"
+                    future = df_hist[df_hist.index > idx]
                     for _, f in future.iterrows():
                         if f['Low'] <= tp:
                             res = "✅ GAGNÉ"
@@ -120,120 +137,104 @@ def get_backtest_signals(df):
                     
                     signals.append({
                         "Date": idx.strftime('%d/%m %H:%M'),
-                        "Type": "SHORT (Vente)",
-                        "Entrée": round(row['Close'], 5),
-                        "SL": round(sl, 5),
-                        "TP": round(tp, 5),
+                        "Type": "SHORT 🔴",
+                        "Prix": round(row['Close'], 5),
                         "Résultat": res
                     })
                     taken = True
                     
     return pd.DataFrame(signals)
 
-# --- 4. SIGNAL EN DIRECT (LIVE) ---
-def get_current_setup(df):
-    last_row = df.iloc[-1]
-    
-    # Récupérer les données d'aujourd'hui
-    current_day = last_row.name.date()
-    day_data = df[df.index.date == current_day]
-    
-    # Calculer le range Asie d'aujourd'hui
+# --- 4. SIGNAL LIVE AVEC ATR ---
+def get_live_setup(df):
+    last = df.iloc[-1]
+    day_data = df[df.index.date == last.name.date()]
     asia = day_data[(day_data.index.hour >= 0) & (day_data.index.hour < 8)]
     
-    if asia.empty:
-        return None, "En attente de la fin de la session Asie (08h00)..."
-        
-    asia_high = asia['High'].max()
-    asia_low = asia['Low'].min()
+    if asia.empty: return None, "Attente Range Asie..."
     
-    # Déterminer la tendance actuelle
-    is_bullish = last_row['Close'] > last_row['EMA50']
-    trend_str = "HAUSSIÈRE 🟢 (Chercher Achat)" if is_bullish else "BAISSIÈRE 🔴 (Chercher Vente)"
+    asia_hi, asia_lo = asia['High'].max(), asia['Low'].min()
+    trend = "HAUSSIÈRE 🟢" if last['Close'] > last['EMA50'] else "BAISSIÈRE 🔴"
     
-    setup_info = {
-        "Prix Actuel": round(last_row['Close'], 5),
-        "Tendance EMA50": trend_str,
-        "Haut Asie": round(asia_high, 5),
-        "Bas Asie": round(asia_low, 5),
-        "Conseil": "ATTENTE ⏳",
+    # Calcul ATR pour affichage
+    atr_val = last['ATR']
+    
+    info = {
+        "Prix": round(last['Close'], 5),
+        "Tendance": trend,
+        "Asie High": round(asia_hi, 5),
+        "Asie Low": round(asia_lo, 5),
+        "Conseil": "⏳ OBSERVATION",
         "ENTRY": None, "SL": None, "TP": None
     }
+    
+    # Logique Live
+    if "🟢" in trend:
+        if last['Low'] < asia_lo and last['Close'] > asia_lo:
+             info["Conseil"] = "🚀 ACHAT (LONG) CONFIRMÉ"
+             info["ENTRY"] = last['Close']
+             info["SL"] = last['Low'] - (atr_val * 0.5)
+             info["TP"] = last['Close'] + ((last['Close'] - info["SL"]) * 2.5)
+        elif last['Close'] < asia_lo:
+             info["Conseil"] = "⚠️ Prix sous le range. Attendre la remontée."
+    else:
+        if last['High'] > asia_hi and last['Close'] < asia_hi:
+             info["Conseil"] = "🔻 VENTE (SHORT) CONFIRMÉ"
+             info["ENTRY"] = last['Close']
+             info["SL"] = last['High'] + (atr_val * 0.5)
+             info["TP"] = last['Close'] - ((info["SL"] - last['Close']) * 2.5)
+        elif last['Close'] > asia_hi:
+             info["Conseil"] = "⚠️ Prix au-dessus du range. Attendre la chute."
+             
+    return info, None
 
-    # LOGIQUE DE DÉCISION LIVE
-    if is_bullish:
-        # On attend que le prix passe SOUS le bas d'Asie puis remonte
-        if last_row['Low'] < asia_low and last_row['Close'] > asia_low:
-            setup_info["Conseil"] = "🚀 ACHAT (LONG) VALIDÉ MAINTENANT"
-            setup_info["ENTRY"] = round(last_row['Close'], 5)
-            setup_info["SL"] = round(last_row['Low'] - 0.0005, 5)
-            setup_info["TP"] = round(asia_high, 5)
-        elif last_row['Close'] < asia_low:
-            setup_info["Conseil"] = "⚠️ ATTENTION : Le prix coule sous le Range Asie. Attendre la remontée (Clôture > Bas Asie)."
-        else:
-            setup_info["Conseil"] = f"⏳ SCÉNARIO : Attendre que le prix descende sous {round(asia_low, 5)} puis remonte."
-
-    else: # Tendance Baissière
-        # On attend que le prix passe AU-DESSUS du haut d'Asie puis redescende
-        if last_row['High'] > asia_high and last_row['Close'] < asia_high:
-            setup_info["Conseil"] = "🔻 VENTE (SHORT) VALIDÉ MAINTENANT"
-            setup_info["ENTRY"] = round(last_row['Close'], 5)
-            setup_info["SL"] = round(last_row['High'] + 0.0005, 5)
-            setup_info["TP"] = round(asia_low, 5)
-        elif last_row['Close'] > asia_high:
-            setup_info["Conseil"] = "⚠️ ATTENTION : Le prix explose au-dessus du Range. Attendre la réintégration."
-        else:
-            setup_info["Conseil"] = f"⏳ SCÉNARIO : Attendre que le prix monte au-dessus de {round(asia_high, 5)} puis redescende."
-
-    return setup_info, None
-
-# --- 5. AFFICHAGE STREAMLIT ---
-tab1, tab2 = st.tabs(["⚡ SIGNAL DIRECT", "📜 Historique (6 Mois)"])
+# --- 5. AFFICHAGE ---
+tab1, tab2 = st.tabs(["⚡ SIGNAL DIRECT", "📊 BACKTEST ELITE"])
 
 with tab1:
-    st.subheader(f"Analyse Temps Réel : {selection}")
-    setup, error = get_current_setup(data)
-    
-    if error:
-        st.warning(error)
-    elif setup:
-        # Affichage principal
+    st.header(f"Radar : {selection}")
+    live, err = get_live_setup(data)
+    if err:
+        st.warning(err)
+    else:
         c1, c2, c3 = st.columns(3)
-        c1.metric("Prix Actuel", setup["Prix Actuel"])
-        c2.metric("Tendance", setup["Tendance EMA50"])
-        c3.metric("Action", setup["Conseil"])
+        c1.metric("Prix", live["Prix"])
+        c2.metric("Tendance", live["Tendance"])
+        c3.metric("Action", live["Conseil"])
         
-        st.divider()
-        
-        # Si un signal est actif, on affiche les détails en gros
-        if setup["ENTRY"]:
-            st.success(f"🎯 SIGNAL ACTIF : {setup['Conseil']}")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("PRIX D'ENTRÉE", setup["ENTRY"])
-            col2.metric("STOP LOSS", setup["SL"], delta="- Risque")
-            col3.metric("TAKE PROFIT", setup["TP"], delta="+ Cible")
+        if live["ENTRY"]:
+            st.success(f"SETUP VALIDÉ ! Ratio 1:2.5")
+            k1, k2, k3 = st.columns(3)
+            k1.metric("ENTRÉE", round(live["ENTRY"], 5))
+            k2.metric("STOP LOSS", round(live["SL"], 5))
+            k3.metric("TAKE PROFIT", round(live["TP"], 5))
         else:
-            st.info("Aucun signal de manipulation validé pour le moment. Surveillez les niveaux Asie.")
-            st.write(f"**Niveau à surveiller (Haut)** : {setup['Haut Asie']}")
-            st.write(f"**Niveau à surveiller (Bas)** : {setup['Bas Asie']}")
+            st.info("En attente de manipulation des banques...")
+            st.write(f"Surveiller cassure de : **{live['Asie High']}** (Haut) ou **{live['Asie Low']}** (Bas)")
 
 with tab2:
-    st.subheader("Backtest : Stratégie SMC Trend + Sweep")
-    with st.spinner("Calcul de l'historique sur 6 mois..."):
-        df_history = get_backtest_signals(data)
+    st.subheader(f"Performance 6 Mois : {selection}")
+    with st.spinner("Analyse algorithmique en cours..."):
+        df_res = get_elite_signals(data, selection)
     
-    if not df_history.empty:
-        finished = df_history[df_history['Résultat'] != "En cours"]
+    if not df_res.empty:
+        finished = df_res[df_res['Résultat'] != "En cours"]
         if not finished.empty:
-            wins = (finished['Résultat'] == "✅ GAGNÉ").sum()
+            win_count = (finished['Résultat'] == "✅ GAGNÉ").sum()
             total = len(finished)
-            wr = (wins / total) * 100
+            wr = (win_count / total) * 100
             
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Taux de Réussite", f"{wr:.1f}%")
-            k2.metric("Total Trades", total)
-            k3.metric("Trades Gagnants", wins)
-        
-        st.dataframe(df_history.sort_values(by="Date", ascending=False), use_container_width=True)
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Taux de Réussite", f"{wr:.1f}%")
+            m2.metric("Total Signaux", total)
+            m3.metric("Gagnants", win_count)
+            
+            st.dataframe(df_res.sort_values(by="Date", ascending=False), use_container_width=True)
+            
+            if wr > 70:
+                st.balloons()
+                st.success("🔥 STRATÉGIE VALIDÉE (>70%) SUR CETTE PAIRE !")
+        else:
+            st.write("Trades en cours, pas de résultat fini.")
     else:
-        st.warning("Aucun trade SMC trouvé sur les 6 derniers mois. Le marché n'a pas offert de configurations propres.")
+        st.warning("Aucun signal détecté. Essayez une autre paire ou attendez plus de volatilité.")
