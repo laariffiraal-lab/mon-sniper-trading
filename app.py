@@ -3,92 +3,89 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 
-st.set_page_config(page_title="SMC Breaker 80%", layout="wide")
-st.title("🏦 Sniper SMC : Breaker Blocks & Liquidité")
-
-# Configuration des actifs
-pairs = {"GOLD": "GC=F", "EUR/USD": "EURUSD=X", "NASDAQ": "NQ=F", "BTC/USD": "BTC-USD"}
-selection = st.sidebar.selectbox("Actif", list(pairs.keys()))
+st.set_page_config(page_title="EUR/USD 70% Strategy", layout="wide")
+st.title("🇪🇺 Sniper EUR/USD : EMA + MACD + Session")
 
 @st.cache_data(ttl=3600)
-def load_data(symbol):
-    # On télécharge 1 an pour avoir un historique de 6 mois solide
-    df = yf.download(symbol, period="1y", interval="1h")
+def load_data():
+    # On prend 1 an de données en 1H pour l'historique
+    df = yf.download("EURUSD=X", period="1y", interval="1h")
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df
 
-data = load_data(pairs[selection])
+data = load_data()
 
-def apply_smc_breaker(df):
-    # Calculs de base stables (sans dépendre de noms de colonnes variables)
+def apply_70pc_strategy(df):
+    # 1. MOYENNES MOBILES (Le "Crossover" institutionnel)
+    df['EMA8'] = ta.ema(df['Close'], length=8)
+    df['EMA21'] = ta.ema(df['Close'], length=21)
     df['EMA200'] = ta.ema(df['Close'], length=200)
-    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
     
+    # 2. MACD (Paramètres standards pour confirmer le momentum)
+    macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
+    df['MACD'] = macd['MACD_12_26_9']
+    df['MACD_S'] = macd['MACDs_12_26_9']
+    
+    # 3. ATR pour le Stop Loss (1.5x ATR)
+    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+
     signals = []
-    # Scan sur les 6 derniers mois (environ 4300 bougies horaires)
-    for i in range(100, len(df)):
-        window = df.iloc[i-30:i]
-        
-        # 1. Identification d'un "Fail High" (Liquidité)
-        high_recent = window['High'].max()
-        low_recent = window['Low'].min()
-        
+    for i in range(50, len(df)):
         curr = df.iloc[i]
         prev = df.iloc[i-1]
         
-        # --- LOGIQUE SMC BREAKER ---
-        # A. Tendance de fond
-        trend_up = curr['Close'] > curr['EMA200']
+        # --- CONDITIONS DE HAUTE PROBABILITÉ ---
         
-        # B. Le Breaker : Le prix a cassé un ancien sommet mais a réintégré (Manipulation)
-        # Puis il casse la structure vers le haut
-        manipulation = prev['High'] > high_recent and curr['Close'] < high_recent
+        # A. SESSION : Uniquement Londres & New York (8h - 16h UTC)
+        hour = df.index[i].hour
+        is_active_session = 8 <= hour <= 16
         
-        # C. Rebond sur "Order Block" : On entre quand le prix touche le milieu du range récent
-        mid_point = (high_recent + low_recent) / 2
-        retest_ok = curr['Low'] <= mid_point and curr['Close'] > mid_point
+        # B. TENDANCE : Prix au-dessus de l'EMA 200 et EMA8 > EMA21
+        trend_ok = curr['Close'] > curr['EMA200'] and curr['EMA8'] > curr['EMA21']
         
-        if trend_up and retest_ok and curr['Close'] > prev['Close']:
-            # Gestion du Risque : TP au sommet / SL sous le point bas du range
-            sl = low_recent
-            tp = high_recent + (high_recent - low_recent)
+        # C. MOMENTUM : MACD au-dessus de sa ligne de signal (Achat confirmé)
+        momentum_ok = curr['MACD'] > curr['MACD_S']
+        
+        # D. LE TRIGGER : On entre quand le prix touche ou descend vers l'EMA 8 (Le Rebond)
+        trigger = curr['Low'] <= curr['EMA8'] and curr['Close'] > curr['EMA8']
+
+        if is_active_session and trend_ok and momentum_ok and trigger:
+            # Gestion du risque (Ratio 1:1.5 pour sécuriser les 70%)
+            sl = curr['Close'] - (curr['ATR'] * 1.5)
+            tp = curr['Close'] + (curr['ATR'] * 2.2)
             
-            # Calcul du résultat
-            future = df.iloc[i+1 : i+100]
+            future = df.iloc[i+1 : i+48]
             res = "En cours"
             for _, row in future.iterrows():
                 if row['High'] >= tp:
                     res = "✅ GAGNÉ"
                     break
                 if row['Low'] <= sl:
-                    res = "❌ STOP OUT"
+                    res = "❌ PERDU"
                     break
             
             signals.append({
-                "Date": df.index[i].strftime('%d/%m/%Y %H:%M'),
+                "Date": df.index[i].strftime('%d/%m %H:%M'),
                 "Prix": round(curr['Close'], 5),
-                "Setup": "SMC Breaker Rebound",
                 "Résultat": res
             })
     return signals
 
-tab1, tab2 = st.tabs(["🚀 Radar Temps Réel", "📜 Historique 6 Mois"])
+tab1, tab2 = st.tabs(["🚀 Radar Direct", "📜 Historique 6 Mois"])
 
 with tab2:
-    results = apply_smc_breaker(data)
+    results = apply_70pc_strategy(data)
     if results:
-        df_res = pd.DataFrame(results).drop_duplicates(subset=['Date'])
-        # Filtrage 180 jours
-        df_res['dt'] = pd.to_datetime(df_res['Date'], format='%d/%m/%Y %H:%M')
+        df_res = pd.DataFrame(results).drop_duplicates()
+        df_res['dt'] = pd.to_datetime(df_res['Date'], format='%d/%m %H:%M')
+        # On affiche les 180 derniers jours
         limit = pd.Timestamp.now() - pd.Timedelta(days=180)
         df_final = df_res[df_res['dt'] > limit]
         
         finished = df_final[df_final['Résultat'] != "En cours"]
         if not finished.empty:
             wr = (finished['Résultat'] == "✅ GAGNÉ").sum() / len(finished) * 100
-            st.metric("Taux de Réussite (SMC Elite)", f"{wr:.1f}%")
+            st.metric("Taux de Réussite (Objectif 70%)", f"{wr:.1f}%")
         
-        st.dataframe(df_final.drop(columns=['dt']).sort_values(by="Date", ascending=False), use_container_width=True)
-    else:
-        st.warning("Aucun signal SMC validé trouvé sur 6 mois.")
+        st.table(df_final.drop(columns=['dt']).sort_values(by="Date", ascending=False))
