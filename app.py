@@ -55,7 +55,8 @@ if not data.empty:
     else:
         st.info("⌛ ANALYSE : Le marché n'est pas encore dans une zone de haute probabilité. Attends un retour dans la zone Fibonacci.")
 
-    # Graphique simple pour voir l'évolution
-    st.line_chart(data['Close'].tail(50))
-    
- st.write(f"Dernière mise à jour : {data.index[-1]}")
+   else:
+    st.info("⌛ ANALYSE : Le marché n'est pas encore dans une zone de haute probabilité. Attends un retour dans la zone Fibonacci.")
+
+st.line_chart(data['Close'].tail(50))
+st.write(f"Dernière mise à jour : {data.index[-1]}")
